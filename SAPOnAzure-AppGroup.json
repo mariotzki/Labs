@@ -1,0 +1,470 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2014-04-01-preview/deploymentTemplate.json",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "userImageStorageAccountName": {
+      "type": "string",
+      "defaultValue": "userImageStorageAccountName"
+    },
+    "userImageStorageContainerName": {
+      "type": "string",
+      "defaultValue": "userImageStorageContainerName"
+    },
+    "SAPImageVhdName": {
+      "type": "string"
+    },
+    "SQLImageVhdName": {
+      "type": "string"
+    },
+    "adminUserName": {
+      "type": "string"
+    },
+    "adminPassword": {
+      "type": "securestring"
+    },
+    "subscriptionId": {
+      "type": "string"
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "West US"
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_A2"
+    },
+    "vmNameAD": {
+      "type": "string",
+      "defaultValue": "myADVM"
+    },
+    "vmNameSAP": {
+      "type": "string",
+      "defaultValue": "mySAPVM"
+    },
+    "vmNameSQL": {
+      "type": "string",
+      "defaultValue": "mySQLVM"
+    },
+    "virtualNetworkName": {
+      "type": "string",
+      "defaultValue": "SAPVNET2"
+    },
+    "domainName": {
+      "type": "string",
+      "metadata": {
+        "description": "The FQDN of the AD Domain created "
+      }
+    },
+    "dnsNameForPublicIPAD": {
+      "type": "string",
+      "defaultValue": "sapadserver"
+    },
+    "publicIPAddressNameAD": {
+      "type": "string",
+      "defaultValue": "myPublicIPAD"
+    },
+    "ADNicName": {
+      "type": "string",
+      "defaultValue": "myADNIC"
+    },
+    "adPDCNicIPAddress": {
+      "type": "string",
+      "metadata": {
+        "description": "The IP address of the new AD PDC"
+      },
+      "defaultValue": "10.0.0.10"
+    },
+    "dnsNameForPublicIPSAP": {
+      "type": "string",
+      "defaultValue": "sapappserver"
+    },
+    "publicIPAddressNameSAP": {
+      "type": "string",
+      "defaultValue": "myPublicIPSAP"
+    },
+    "SAPNicName": {
+      "type": "string",
+      "defaultValue": "mySAPNIC"
+    },
+    "dnsNameForPublicIPSQL": {
+      "type": "string",
+      "defaultValue": "sapsqlserver"
+    },
+    "publicIPAddressNameSQL": {
+      "type": "string",
+      "defaultValue": "myPublicIPSQL"
+    },
+    "SQLNicName": {
+      "type": "string",
+      "defaultValue": "mySQLNIC"
+    },
+    "assetLocation": {
+      "type": "string",
+      "metadata": {
+        "description": "The location of resources such as templates and DSC modules that the script is dependent"
+      },
+      "defaultValue": "https://github.com/Azure/azure-quickstart-templates/raw/master/active-directory-new-domain/"
+    },
+    "vpnGatewayName": {
+      "type": "string"
+    }
+  },
+  "variables": {
+    "vhdStorageName": "[concat('vhdstorage', uniqueString(resourceGroup().id))]",
+    "vhdStorageType": "Standard_LRS",
+    "vhdStorageContainerName": "vhds",
+    "addressPrefix": "10.2.0.0/16",
+    "subnet1Name": "Subnet-1",
+    "GatewaySubnet": "GatewaySubnet",
+    "subnet1Prefix": "10.2.1.0/28",
+    "GatewaySubnetPrefix": "10.2.0.0/24",
+    "publicIPAddressType": "Dynamic",
+    "vnetID": "[resourceId('Microsoft.Network/virtualNetworks',parameters('virtualNetworkName'))]",
+    "subnet1Ref": "[concat(variables('vnetID'),'/subnets/',variables('subnet1Name'))]",
+    "SAPImageName": "[concat('http://',parameters('userImageStorageAccountName'),'.blob.core.windows.net/',parameters('userImageStorageContainerName'),'/',parameters('SAPImageVhdName'))]",
+    "SQLImageName": "[concat('http://',parameters('userImageStorageAccountName'),'.blob.core.windows.net/',parameters('userImageStorageContainerName'),'/',parameters('SQLImageVhdName'))]",
+    "osADDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameAD'),'.vhd')]",
+    "dataADDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameAD'),'-data.vhd')]",
+    "osSAPDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameSAP'),'.vhd')]",
+    "dataSAPDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameSAP'),'-data.vhd')]",
+    "osSQLDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameSQL'),'.vhd')]",
+    "dataSQLDiskVhdName": "[concat('http://',variables('vhdStorageName'),'.blob.core.windows.net/',variables('vhdStorageContainerName'),'/',parameters('vmNameSQL'),'-data.vhd')]",
+    "adPDCModulesURL": "[concat(parameters('assetLocation'),'CreateADPDC.ps1.zip')]",
+    "adPDCConfigurationFunction": "CreateADPDC.ps1\\CreateADPDC",
+    "vnetwithDNSTemplateUri": "[concat(parameters('assetLocation'),'vnet-with-dns-server.json')]",
+    "nicTemplateUri": "[concat(parameters('assetLocation'),'nic.json')]",
+    "dataDiskSize": 1000,
+    "backlash": "\\",
+    "vpngatewayName": "SAPonAzureGateway",
+    "sharedKey": "abc123"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "name": "[variables('vhdStorageName')]",
+      "apiVersion": "2015-06-15",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "StorageAccount"
+      },
+      "properties": {
+        "accountType": "[variables('vhdStorageType')]"
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[parameters('virtualNetworkName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "VirtualNetwork"
+      },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnet1Name')]",
+            "properties": {
+              "addressPrefix": "[variables('subnet1Prefix')]"
+            }
+          },
+          {
+            "name": "[variables('GatewaySubnet')]",
+            "properties": {
+              "addressPrefix": "[variables('GatewaySubnetPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[parameters('publicIPAddressNameSAP')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SAPPublicIPAddress"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "[variables('publicIPAddressType')]",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(parameters('dnsNameForPublicIPSAP'), uniqueString(resourceGroup().id))]"
+        }
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[parameters('SAPNicName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SAPNetworkInterface"
+      },
+      "dependsOn": [
+
+        "[concat('Microsoft.Network/publicIPAddresses/', parameters('publicIPAddressNameSAP'))]",
+        "[concat('Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'))]"
+
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses',parameters('publicIPAddressNameSAP'))]"
+              },
+              "subnet": {
+                "id": "[variables('subnet1Ref')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[parameters('vmNameSAP')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SAPAppServer"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('vhdStorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', parameters('SAPNicName'))]"
+
+      ],
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[parameters('vmNameSAP')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2012-R2-Datacenter",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(parameters('vmNameSAP'),'-osDisk')]",
+
+            "vhd": {
+              "uri": "[variables('osSAPDiskVhdName')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          },
+          "dataDisks": [
+            {
+              "vhd": {
+                "uri": "[variables('dataSAPDiskVhdName')]"
+              },
+              "name": "[concat(parameters('vmNameSAP'),'-data-disk1')]",
+              "caching": "None",
+              "createOption": "empty",
+              "diskSizeGB": "[variables('dataDiskSize')]",
+              "lun": 0
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',parameters('SAPNicName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[parameters('publicIPAddressNameSQL')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SQLPublicIPAddress"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "[variables('publicIPAddressType')]",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(parameters('dnsNameForPublicIPSQL'), uniqueString(resourceGroup().id))]"
+        }
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[parameters('SQLNicName')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SQLNetworkInterface"
+      },
+      "dependsOn": [
+
+        "[concat('Microsoft.Network/publicIPAddresses/', parameters('publicIPAddressNameSQL'))]",
+        "[concat('Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'))]"
+
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig2",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIPAddressNameSQL'))]"
+              },
+              "subnet": {
+                "id": "[variables('subnet1Ref')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[parameters('vmNameSQL')]",
+      "location": "[resourceGroup().location]",
+      "tags": {
+        "displayName": "SAPSQLServer"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('vhdStorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', parameters('SQLNicName'))]"
+
+      ],
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[parameters('vmNameSQL')]",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "MicrosoftWindowsServer",
+            "offer": "WindowsServer",
+            "sku": "2012-R2-Datacenter",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[concat(parameters('vmNameSQL'),'-osDisk')]",
+
+            "vhd": {
+              "uri": "[variables('osSQLDiskVhdName')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          },
+          "dataDisks": [
+            {
+              "vhd": {
+                "uri": "[variables('dataSQLDiskVhdName')]"
+              },
+              "name": "[concat(parameters('vmNameSQL'),'-data-disk1')]",
+              "caching": "None",
+              "createOption": "empty",
+              "diskSizeGB": "[variables('dataDiskSize')]",
+              "lun": 0
+            }
+          ]
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',parameters('SQLNicName'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "[variables('vpngatewayName')]",
+      "apiVersion": "2015-05-01-preview",
+      "dependsOn": [ "[concat('Microsoft.Network/virtualNetworks/', parameters('virtualNetworkName'))]" ],
+      "type": "Microsoft.Network/virtualNetworkGateways",
+      "location": "westus",
+      "properties": {
+
+        "ipConfigurations": [
+          {
+            "name": "vnetGatewayConfig",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', 'SapAzureGatewayPublicIP')]"
+              },
+              "subnet": {
+                "id": "[concat(variables('vnetID'),'/subnets/',variables('GatewaySubnet'))]"
+              }
+            }
+          }
+        ],
+        "sku": {
+          "name": "Basic",
+          "tier": "Basic",
+          "capacity": 0
+        },
+        "gatewayType": "Vpn",
+        "vpnType": "RouteBased",
+        "enableBgp": false
+      }
+    },
+    {
+      "name": "SapAzureGatewayPublicIP",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-05-01-preview",
+      "dependsOn": [ ],
+      "tags": {
+        "displayName": "AzureGatewayPublicIP"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[concat('sapazuregatewayip', uniqueString(resourceGroup().id))]"
+        }
+      }
+    },
+    {
+      "name": "vnet2vnetconnection",
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/connections",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworkGateways/', variables('vpngatewayName'))]"
+        //"[concat('Microsoft.Network/localNetworkGateways/', parameters('localGatewayName'))]"
+      ],
+      "properties": {
+        "virtualNetworkGateway1": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', variables('vpngatewayName'))]"
+        },
+        "virtualNetworkGateway2": {
+          "id": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('vpngatewayName'))]"
+        },
+        //"localNetworkGateway2": {
+        //  "id": "[resourceId('Microsoft.Network/localNetworkGateways', parameters('localGatewayName'))]"
+        //},
+        "connectionType": "Vnet2Vnet",
+        "routingWeight": 3,
+        "sharedKey": "[variables('sharedKey')]"
+      }
+    }
+
+  ]
+}
